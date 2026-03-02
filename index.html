@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Simple Messenger</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        #login-section, #chat-section { max-width: 800px; margin: auto; }
+        #users-panel { float: left; width: 200px; border-right: 1px solid #ccc; padding-right: 10px; }
+        #chat-area { margin-left: 220px; }
+        #users-list { list-style: none; padding: 0; }
+        #users-list li { margin: 5px 0; }
+        .user-btn { width: 100%; text-align: left; padding: 5px; cursor: pointer; }
+        .user-btn.selected { background-color: #e0e0e0; }
+        #messages-list { height: 400px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+        .message { margin-bottom: 10px; }
+        .message .sender { font-weight: bold; }
+        .message .time { font-size: 0.8em; color: #666; margin-left: 10px; }
+        #message-form { display: flex; }
+        #message-input { flex-grow: 1; padding: 5px; margin-right: 5px; }
+        #send-btn { padding: 5px 10px; }
+        #logout { margin-bottom: 10px; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <div id="login-section">
+        <h2>Register / Login</h2>
+        <input type="text" id="nickname-input" placeholder="Enter your nickname">
+        <button id="register-btn">Enter</button>
+        <p id="login-error" class="error"></p>
+    </div>
+
+    <div id="chat-section" style="display: none;">
+        <div>
+            <span>Logged in as: <strong id="current-user"></strong></span>
+            <button id="logout-btn">Logout</button>
+        </div>
+        <hr>
+        <div id="users-panel">
+            <h3>Users</h3>
+            <ul id="users-list"></ul>
+        </div>
+        <div id="chat-area">
+            <h3 id="chat-header">Select a user to start chatting</h3>
+            <div id="messages-list"></div>
+            <form id="message-form">
+                <input type="text" id="message-input" placeholder="Type a message" disabled>
+                <button type="submit" id="send-btn" disabled>Send</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // ==================== НАСТРОЙКИ ====================
+        // Если фронтенд будет на GitHub Pages, а сервер на Render,
+        // укажите здесь полный URL вашего Render-приложения, например:
+        // const API_BASE = 'https://your-app.onrender.com';
+        const API_BASE = '';   // для локальной разработки оставьте пустым
+        // ====================================================
+
+        // Состояние приложения
+        let currentUser = null;
+        let selectedUser = null;
+        let users = [];
+        let messages = []; // все сообщения текущего пользователя
+
+        // Элементы DOM
+        const loginSection = document.getElementById('login-section');
+        const chatSection = document.getElementById('chat-section');
+        const nicknameInput = document.getElementById('nickname-input');
+        const registerBtn = document.getElementById('register-btn');
+        const loginError = document.getElementById('login-error');
+        const currentUserSpan = document.getElementById('current-user');
+        const logoutBtn = document.getElementById('logout-btn');
+        const usersList = document.getElementById('users-list');
+        const chatHeader = document.getElementById('chat-header');
+        const messagesList = document.getElementById('messages-list');
+        const messageForm = document.getElementById('message-form');
+        const messageInput = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+
+        // Регистрация
+        registerBtn.addEventListener('click', async () => {
+            const nickname = nicknameInput.value.trim();
+            if (!nickname) {
+                loginError.textContent = 'Please enter a nickname';
+                return;
+            }
+            try {
+                const response = await fetch(`${API_BASE}/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ nickname })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    currentUser = nickname;
+                    currentUserSpan.textContent = currentUser;
+                    loginSection.style.display = 'none';
+                    chatSection.style.display = 'block';
+                    loginError.textContent = '';
+                    nicknameInput.value = '';
+                    startPolling();
+                    fetchUsers();
+                    fetchMessages();
+                } else {
+                    loginError.textContent = data.error || 'Registration failed';
+                }
+            } catch (err) {
+                loginError.textContent = 'Network error';
+                console.error(err);
+            }
+        });
+
+        // Выход
+        logoutBtn.addEventListener('click', () => {
+            currentUser = null;
+            selectedUser = null;
+            users = [];
+            messages = [];
+            chatSection.style.display = 'none';
+            loginSection.style.display = 'block';
+            stopPolling();
+        });
+
+        // Отправка сообщения
+        messageForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!selectedUser) {
+                alert('Select a user first');
+                return;
+            }
+            const text = messageInput.value.trim();
+            if (!text) return;
+            try {
+                const response = await fetch(`${API_BASE}/messages`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ from: currentUser, to: selectedUser, text })
+                });
+                if (response.ok) {
+                    messageInput.value = '';
+                    fetchMessages(); // сразу показываем отправленное сообщение
+                } else {
+                    const err = await response.json();
+                    alert(err.error || 'Failed to send message');
+                }
+            } catch (err) {
+                alert('Network error');
+            }
+        });
+
+        // Загрузка списка пользователей (исключая себя)
+        async function fetchUsers() {
+            if (!currentUser) return;
+            try {
+                const response = await fetch(`${API_BASE}/users?exclude=${encodeURIComponent(currentUser)}`);
+                if (response.ok) {
+                    users = await response.json();
+                    renderUsersList();
+                }
+            } catch (err) {
+                console.error('Failed to fetch users', err);
+            }
+        }
+
+        // Загрузка всех сообщений текущего пользователя
+        async function fetchMessages() {
+            if (!currentUser) return;
+            try {
+                const response = await fetch(`${API_BASE}/messages/${encodeURIComponent(currentUser)}`);
+                if (response.ok) {
+                    messages = await response.json();
+                    renderMessages();
+                }
+            } catch (err) {
+                console.error('Failed to fetch messages', err);
+            }
+        }
+
+        // Отрисовка списка пользователей
+        function renderUsersList() {
+            usersList.innerHTML = '';
+            users.forEach(user => {
+                const li = document.createElement('li');
+                const btn = document.createElement('button');
+                btn.textContent = user;
+                btn.classList.add('user-btn');
+                if (user === selectedUser) {
+                    btn.classList.add('selected');
+                }
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.user-btn').forEach(b => b.classList.remove('selected'));
+                    btn.classList.add('selected');
+                    selectedUser = user;
+                    chatHeader.textContent = `Chat with ${user}`;
+                    messageInput.disabled = false;
+                    sendBtn.disabled = false;
+                    renderMessages();
+                });
+                li.appendChild(btn);
+                usersList.appendChild(li);
+            });
+            if (users.length === 0) {
+                usersList.innerHTML = '<li>No other users online</li>';
+                selectedUser = null;
+                chatHeader.textContent = 'Select a user to start chatting';
+                messageInput.disabled = true;
+                sendBtn.disabled = true;
+                messagesList.innerHTML = '';
+            } else if (selectedUser && !users.includes(selectedUser)) {
+                selectedUser = null;
+                chatHeader.textContent = 'Select a user to start chatting';
+                messageInput.disabled = true;
+                sendBtn.disabled = true;
+                renderMessages();
+            }
+        }
+
+        // Отрисовка сообщений с выбранным пользователем
+        function renderMessages() {
+            if (!selectedUser) {
+                messagesList.innerHTML = '';
+                return;
+            }
+            const chatMessages = messages.filter(m => 
+                (m.from === currentUser && m.to === selectedUser) || (m.from === selectedUser && m.to === currentUser)
+            );
+            chatMessages.sort((a, b) => a.timestamp - b.timestamp);
+
+            messagesList.innerHTML = '';
+            chatMessages.forEach(m => {
+                const div = document.createElement('div');
+                div.className = 'message';
+                const senderSpan = document.createElement('span');
+                senderSpan.className = 'sender';
+                senderSpan.textContent = m.from === currentUser ? 'You' : m.from;
+                const timeSpan = document.createElement('span');
+                timeSpan.className = 'time';
+                timeSpan.textContent = new Date(m.timestamp).toLocaleTimeString();
+                const textDiv = document.createElement('div');
+                textDiv.textContent = m.text;
+                div.appendChild(senderSpan);
+                div.appendChild(timeSpan);
+                div.appendChild(textDiv);
+                messagesList.appendChild(div);
+            });
+            messagesList.scrollTop = messagesList.scrollHeight;
+        }
+
+        // Пинг сервера (чтобы он не засыпал)
+        async function pingServer() {
+            try {
+                await fetch(`${API_BASE}/ping`);
+            } catch (err) {
+                console.error('Ping failed', err);
+            }
+        }
+
+        // Интервалы обновления
+        let usersInterval, messagesInterval, pingInterval;
+
+        function startPolling() {
+            usersInterval = setInterval(fetchUsers, 10000);       // список пользователей каждые 10 сек
+            messagesInterval = setInterval(fetchMessages, 3000);  // сообщения каждые 3 сек
+            pingInterval = setInterval(pingServer, 300000);       // пинг каждые 5 минут
+            pingServer(); // сразу после входа
+        }
+
+        function stopPolling() {
+            clearInterval(usersInterval);
+            clearInterval(messagesInterval);
+            clearInterval(pingInterval);
+        }
+    </script>
+</body>
+</html>
